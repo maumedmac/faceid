@@ -98,13 +98,19 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
 
         setContentView(R.layout.activity_main);
 
-        mOpenCvCameraView = (CameraBridgeViewBase) findViewById(R.id.fd_activity_surface_view);
+        mOpenCvCameraView = (CameraBridgeViewBase) findViewById(R.id.camera_view);
         mOpenCvCameraView.setVisibility(CameraBridgeViewBase.VISIBLE);
         mOpenCvCameraView.setCameraIndex(mCameraId);
         mOpenCvCameraView.setCvCameraViewListener(this);
 
         Button switchCameraButton = findViewById(R.id.switch_camera_button);
         switchCameraButton.setOnClickListener(v -> swapCamera());
+
+        Button registerButton = findViewById(R.id.button_register);
+        registerButton.setOnClickListener(v -> Toast.makeText(this, "Botón de Registro presionado", Toast.LENGTH_SHORT).show());
+
+        Button loadDataButton = findViewById(R.id.button_load_data);
+        loadDataButton.setOnClickListener(v -> Toast.makeText(this, "Botón de Carga de Datos presionado", Toast.LENGTH_SHORT).show());
     }
 
     private void swapCamera() {
