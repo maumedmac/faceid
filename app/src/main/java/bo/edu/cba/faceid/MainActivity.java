@@ -169,7 +169,14 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     }
 
     private void saveFaceFeature(Mat feature) {
-        File file = new File(getFilesDir(), "face_feature.bin");
+        File storageDir = getExternalFilesDir(null);
+        if (storageDir == null) {
+            Log.e(TAG, "External storage is not available.");
+            Toast.makeText(this, "Almacenamiento externo no disponible.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        File file = new File(storageDir, "face_feature.bin");
         try (FileOutputStream fos = new FileOutputStream(file); ObjectOutputStream oos = new ObjectOutputStream(fos)) {
             float[] featureArray = new float[feature.cols() * feature.rows()];
             feature.get(0, 0, featureArray);
@@ -182,7 +189,14 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     }
 
     private void loadData() {
-        File file = new File(getFilesDir(), "face_feature.bin");
+        File storageDir = getExternalFilesDir(null);
+        if (storageDir == null) {
+            Log.e(TAG, "External storage is not available.");
+            Toast.makeText(this, "Almacenamiento externo no disponible.", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        File file = new File(storageDir, "face_feature.bin");
         if (!file.exists()) {
             Toast.makeText(this, "No hay ninguna huella facial registrada.", Toast.LENGTH_SHORT).show();
             return;
