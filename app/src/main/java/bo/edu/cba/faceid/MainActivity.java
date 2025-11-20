@@ -25,12 +25,13 @@ import android.widget.EditText;
 import android.widget.Toast;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -39,10 +40,10 @@ import java.util.Map;
 public class MainActivity extends CameraActivity implements CvCameraViewListener2 {
 
     private static final String    TAG  = "OCVSample::Activity";
-    private static final String    DATABASE_FILE_NAME = "face_database.bin";
 
     private static final Scalar    BOX_COLOR         = new Scalar(0, 255, 0);
     private static final Scalar    MATCH_COLOR       = new Scalar(0, 255, 0);
+    private static final int       NUM_REGISTRATION_SAMPLES = 5;
 
     private Mat                    mRgba;
     private Mat                    mBgr;
@@ -53,28 +54,29 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     private FaceRecognizerSF       mFaceRecognizer;
     private Mat                    mFaces;
     private final HashMap<String, Mat> mRegisteredFaces = new HashMap<>();
+    private final List<Mat>        registrationFeatures = new ArrayList<>();
+
+    private AppDatabase            appDatabase;
 
     private CameraBridgeViewBase   mOpenCvCameraView;
     private int mCameraId = CameraBridgeViewBase.CAMERA_ID_BACK;
 
-    public MainActivity() {
-        Log.i(TAG, "Instantiated new " + this.getClass());
-    }
-
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        Log.i(TAG, "called onCreate");
         super.onCreate(savedInstanceState);
 
         if (OpenCVLoader.initLocal()) {
             Log.i(TAG, "OpenCV loaded successfully");
         } else {
-            Log.e(TAG, "OpenCV initialization failed!");
-            (Toast.makeText(this, "OpenCV initialization failed!", Toast.LENGTH_LONG)).show();
+            Log.e(TAG, "¡La inicialización de OpenCV falló!");
+            Toast.makeText(this, "¡La inicialización de OpenCV falló!", Toast.LENGTH_LONG).show();
             return;
         }
 
+        appDatabase = AppDatabase.getDatabase(this);
+
         loadFaceModels();
+        loadData();
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
@@ -133,127 +135,198 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
 
     private void startRegistrationProcess() {
         if (mFaceRecognizer == null || mFaces == null || mFaces.empty()) {
-            Toast.makeText(this, "No face detected for registration.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "No se detectó ningún rostro para iniciar el registro.", Toast.LENGTH_SHORT).show();
             return;
         }
         if (mFaces.rows() > 1) {
-            Toast.makeText(this, "Multiple faces detected. Please ensure only one.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Se detectaron múltiples rostros. Por favor, asegúrese de que solo haya uno.", Toast.LENGTH_SHORT).show();
             return;
         }
 
-        // Extract feature from the detected face
         final Mat currentFeature = new Mat();
         Mat alignedFace = new Mat();
         mFaceRecognizer.alignCrop(mBgr, mFaces.row(0), alignedFace);
         mFaceRecognizer.feature(alignedFace, currentFeature);
         alignedFace.release();
 
-        // Check if the face is already registered
         String matchedName = findMatchingFace(currentFeature);
+        currentFeature.release();
 
         if (matchedName != null) {
-            Toast.makeText(this, "This face is already registered as '" + matchedName + "'.", Toast.LENGTH_LONG).show();
-            currentFeature.release(); // Release the feature as it's not needed anymore
+            Toast.makeText(this, "Este rostro parece ya estar registrado como '" + matchedName + "'.", Toast.LENGTH_LONG).show();
             return;
         }
 
-        // Face is not registered, proceed with asking for a name.
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        builder.setTitle("Enter Name for New Face");
+        startGuidedRegistration();
+    }
 
+    private void startGuidedRegistration() {
+        for (Mat feature : registrationFeatures) {
+            feature.release();
+        }
+        registrationFeatures.clear();
+        captureStep(0);
+    }
+
+    private void captureStep(int step) {
+        if (step >= NUM_REGISTRATION_SAMPLES) {
+            processAndSaveTemplate();
+            return;
+        }
+
+        String[] instructions = {
+                "Paso 1/5: Mire al Frente",
+                "Paso 2/5: Gire Ligeramente a la Izquierda",
+                "Paso 3/5: Gire Ligeramente a la Derecha",
+                "Paso 4/5: Mire Ligeramente Hacia Arriba",
+                "Paso 5/5: Mire Ligeramente Hacia Abajo"
+        };
+
+        new AlertDialog.Builder(this)
+                .setTitle("Registrar Nuevo Rostro")
+                .setMessage(instructions[step])
+                .setPositiveButton("Capturar", (dialog, which) -> {
+                    if (mFaces == null || mFaces.empty() || mFaces.rows() > 1) {
+                        Toast.makeText(this, "Por favor, asegúrese de que solo un rostro esté claramente visible.", Toast.LENGTH_SHORT).show();
+                        captureStep(step);
+                        return;
+                    }
+
+                    Mat alignedFace = new Mat();
+                    mFaceRecognizer.alignCrop(mBgr, mFaces.row(0), alignedFace);
+                    Mat feature = new Mat();
+                    mFaceRecognizer.feature(alignedFace, feature);
+                    registrationFeatures.add(feature);
+                    alignedFace.release();
+
+                    Toast.makeText(this, "¡Captura " + (step + 1) + " exitosa!", Toast.LENGTH_SHORT).show();
+
+                    captureStep(step + 1);
+                })
+                .setNegativeButton("Cancelar", (dialog, which) -> {
+                    for (Mat f : registrationFeatures) {
+                        f.release();
+                    }
+                    registrationFeatures.clear();
+                    dialog.cancel();
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+    private void processAndSaveTemplate() {
+        Mat averagedFeature = new Mat();
+        registrationFeatures.get(0).copyTo(averagedFeature);
+
+        for (int i = 1; i < registrationFeatures.size(); i++) {
+            Core.add(averagedFeature, registrationFeatures.get(i), averagedFeature);
+        }
+        Core.divide(averagedFeature, new Scalar(registrationFeatures.size()), averagedFeature);
+
+        Core.normalize(averagedFeature, averagedFeature);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Ingrese el Nombre para el Rostro Registrado");
         final EditText input = new EditText(this);
         input.setInputType(InputType.TYPE_CLASS_TEXT);
         builder.setView(input);
 
-        builder.setPositiveButton("Register", (dialog, which) -> {
+        builder.setPositiveButton("Guardar", (dialog, which) -> {
             String name = input.getText().toString().trim();
             if (name.isEmpty()) {
-                Toast.makeText(this, "Name cannot be empty.", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "El nombre no puede estar vacío.", Toast.LENGTH_SHORT).show();
+                averagedFeature.release();
             } else if (mRegisteredFaces.containsKey(name)) {
-                Toast.makeText(this, "Name '" + name + "' already exists. Please choose a different name.", Toast.LENGTH_LONG).show();
+                Toast.makeText(this, "El nombre '" + name + "' ya existe.", Toast.LENGTH_LONG).show();
+                averagedFeature.release();
             } else {
-                addFaceToDatabase(name, currentFeature);
+                addUserToDatabase(name, averagedFeature);
             }
         });
 
-        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.cancel());
+        builder.setNegativeButton("Cancelar", (dialog, which) -> {
+            averagedFeature.release();
+            dialog.cancel();
+        });
 
         AlertDialog dialog = builder.create();
-        dialog.setOnDismissListener(d -> currentFeature.release());
+        dialog.setOnDismissListener(d -> {
+            for (Mat feature : registrationFeatures) {
+                feature.release();
+            }
+            registrationFeatures.clear();
+        });
         dialog.show();
     }
+
 
     private String findMatchingFace(Mat currentFeature) {
         if (mRegisteredFaces.isEmpty()) {
             return null;
         }
 
+        String bestMatchName = null;
+        double maxCosineScore = 0.0;
+        double cosThreshold = 0.363;
+
         for (Map.Entry<String, Mat> entry : mRegisteredFaces.entrySet()) {
             double cosScore = mFaceRecognizer.match(entry.getValue(), currentFeature, FaceRecognizerSF.FR_COSINE);
-            double cosThreshold = 0.363; // Recommended threshold for SFace
 
-            if (cosScore > cosThreshold) {
-                return entry.getKey(); // Match found
+            if (cosScore > cosThreshold && cosScore > maxCosineScore) {
+                maxCosineScore = cosScore;
+                bestMatchName = entry.getKey();
             }
         }
-        return null; // No match found
+        return bestMatchName;
     }
 
 
-    private void addFaceToDatabase(String name, Mat feature) {
-        File storageDir = getExternalFilesDir(null);
-        if (storageDir == null) {
-            Toast.makeText(this, "External storage not available.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        File dbFile = new File(storageDir, DATABASE_FILE_NAME);
-        HashMap<String, float[]> faceDatabase = loadFaceDatabase(dbFile);
-
+    private void addUserToDatabase(String name, Mat feature) {
         float[] featureArray = new float[feature.cols() * feature.rows()];
         feature.get(0, 0, featureArray);
-        faceDatabase.put(name, featureArray);
+        byte[] faceEmbedding = floatArrayToByteArray(featureArray);
 
-        try (FileOutputStream fos = new FileOutputStream(dbFile); ObjectOutputStream oos = new ObjectOutputStream(fos)) {
-            oos.writeObject(faceDatabase);
-            mRegisteredFaces.put(name, feature.clone()); // Update in-memory map
-            Toast.makeText(this, "Face of '" + name + "' registered successfully.", Toast.LENGTH_LONG).show();
-        } catch (IOException e) {
-            Log.e(TAG, "Error saving face database", e);
-            Toast.makeText(this, "Error saving face feature.", Toast.LENGTH_SHORT).show();
-        }
-    }
+        User user = new User();
+        user.name = name;
+        user.faceEmbedding = faceEmbedding;
 
-    @SuppressWarnings("unchecked")
-    private HashMap<String, float[]> loadFaceDatabase(File dbFile) {
-        if (!dbFile.exists()) {
-            return new HashMap<>(); // Return a new map if file doesn't exist
-        }
-        try (FileInputStream fis = new FileInputStream(dbFile); ObjectInputStream ois = new ObjectInputStream(fis)) {
-            return (HashMap<String, float[]>) ois.readObject();
-        } catch (IOException | ClassNotFoundException e) {
-            Log.e(TAG, "Error loading face database", e);
-            return new HashMap<>(); // Return a new map on error
-        }
+        appDatabase.userDao().insertUser(user);
+
+        mRegisteredFaces.put(name, feature.clone());
+        Toast.makeText(this, "Rostro de '" + name + "' registrado exitosamente en la base de datos.", Toast.LENGTH_LONG).show();
+
+        feature.release();
     }
 
     private void loadData() {
-        File storageDir = getExternalFilesDir(null);
-        if (storageDir == null) {
-            Toast.makeText(this, "External storage is not available.", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        File dbFile = new File(storageDir, DATABASE_FILE_NAME);
-        HashMap<String, float[]> faceDatabase = loadFaceDatabase(dbFile);
-
         mRegisteredFaces.clear();
-        for (Map.Entry<String, float[]> entry : faceDatabase.entrySet()) {
-            Mat faceFeature = new Mat(1, entry.getValue().length, 5); // CV_32F
-            faceFeature.put(0, 0, entry.getValue());
-            mRegisteredFaces.put(entry.getKey(), faceFeature);
+        List<User> userList = appDatabase.userDao().getAllUsers();
+
+        for (User user : userList) {
+            float[] faceArray = byteArrayToFloatArray(user.faceEmbedding);
+            Mat faceFeature = new Mat(1, faceArray.length, 5);
+            faceFeature.put(0, 0, faceArray);
+            mRegisteredFaces.put(user.name, faceFeature);
         }
-        Toast.makeText(this, mRegisteredFaces.size() + " registered face(s) loaded.", Toast.LENGTH_SHORT).show();
+
+        Toast.makeText(this, mRegisteredFaces.size() + " rostro(s) registrado(s) cargado(s) desde la base de datos.", Toast.LENGTH_SHORT).show();
+    }
+
+    private byte[] floatArrayToByteArray(float[] floats) {
+        ByteBuffer buffer = ByteBuffer.allocate(floats.length * 4);
+        buffer.order(ByteOrder.nativeOrder());
+        FloatBuffer floatBuffer = buffer.asFloatBuffer();
+        floatBuffer.put(floats);
+        return buffer.array();
+    }
+
+    private float[] byteArrayToFloatArray(byte[] bytes) {
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        buffer.order(ByteOrder.nativeOrder());
+        FloatBuffer floatBuffer = buffer.asFloatBuffer();
+        float[] floats = new float[floatBuffer.remaining()];
+        floatBuffer.get(floats);
+        return floats;
     }
 
     private void swapCamera() {
@@ -264,16 +337,14 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     }
 
     @Override
-    public void onPause()
-    {
+    public void onPause() {
         super.onPause();
         if (mOpenCvCameraView != null)
             mOpenCvCameraView.disableView();
     }
 
     @Override
-    public void onResume()
-    {
+    public void onResume() {
         super.onResume();
         if (mOpenCvCameraView != null)
             mOpenCvCameraView.enableView();
@@ -305,6 +376,9 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
         mBgrScaled.release();
         mFaces.release();
         for(Mat mat : mRegisteredFaces.values()) {
+            mat.release();
+        }
+        for(Mat mat : registrationFeatures) {
             mat.release();
         }
     }
