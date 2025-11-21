@@ -18,8 +18,6 @@ public abstract class AppDatabase extends RoomDatabase {
                 if (INSTANCE == null) {
                     INSTANCE = Room.databaseBuilder(context.getApplicationContext(),
                                     AppDatabase.class, "faceid_database")
-                            // Permite consultas en el hilo principal (NO recomendado para producción)
-                            .allowMainThreadQueries()
                             .build();
                 }
             }

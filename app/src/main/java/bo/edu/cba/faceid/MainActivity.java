@@ -4,6 +4,7 @@ import org.opencv.android.CameraActivity;
 import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Core;
+import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.Point;
 import org.opencv.core.Rect;
@@ -17,6 +18,8 @@ import org.opencv.imgproc.Imgproc;
 
 import android.app.AlertDialog;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.util.Log;
 import android.view.WindowManager;
@@ -36,6 +39,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends CameraActivity implements CvCameraViewListener2 {
 
@@ -57,6 +62,8 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     private final List<Mat>        registrationFeatures = new ArrayList<>();
 
     private AppDatabase            appDatabase;
+    private ExecutorService        databaseExecutor;
+    private Handler                mainThreadHandler;
 
     private CameraBridgeViewBase   mOpenCvCameraView;
     private int mCameraId = CameraBridgeViewBase.CAMERA_ID_BACK;
@@ -74,6 +81,8 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
         }
 
         appDatabase = AppDatabase.getDatabase(this);
+        databaseExecutor = Executors.newSingleThreadExecutor();
+        mainThreadHandler = new Handler(Looper.getMainLooper());
 
         loadFaceModels();
         loadData();
@@ -235,22 +244,24 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
             String name = input.getText().toString().trim();
             if (name.isEmpty()) {
                 Toast.makeText(this, "El nombre no puede estar vacío.", Toast.LENGTH_SHORT).show();
-                averagedFeature.release();
             } else if (mRegisteredFaces.containsKey(name)) {
                 Toast.makeText(this, "El nombre '" + name + "' ya existe.", Toast.LENGTH_LONG).show();
-                averagedFeature.release();
             } else {
-                addUserToDatabase(name, averagedFeature);
+                float[] featureArray = new float[averagedFeature.cols() * averagedFeature.rows()];
+                averagedFeature.get(0, 0, featureArray);
+
+                addUserToDatabase(name, featureArray);
+
+                mRegisteredFaces.put(name, averagedFeature.clone());
+                Toast.makeText(this, "Rostro de '" + name + "' registrado exitosamente.", Toast.LENGTH_LONG).show();
             }
         });
 
-        builder.setNegativeButton("Cancelar", (dialog, which) -> {
-            averagedFeature.release();
-            dialog.cancel();
-        });
+        builder.setNegativeButton("Cancelar", (dialog, which) -> dialog.cancel());
 
         AlertDialog dialog = builder.create();
         dialog.setOnDismissListener(d -> {
+            averagedFeature.release();
             for (Mat feature : registrationFeatures) {
                 feature.release();
             }
@@ -280,36 +291,39 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
         return bestMatchName;
     }
 
+    private void addUserToDatabase(String name, float[] featureArray) {
+        databaseExecutor.execute(() -> {
+            byte[] faceEmbedding = floatArrayToByteArray(featureArray);
 
-    private void addUserToDatabase(String name, Mat feature) {
-        float[] featureArray = new float[feature.cols() * feature.rows()];
-        feature.get(0, 0, featureArray);
-        byte[] faceEmbedding = floatArrayToByteArray(featureArray);
+            User user = new User();
+            user.name = name;
+            user.faceEmbedding = faceEmbedding;
 
-        User user = new User();
-        user.name = name;
-        user.faceEmbedding = faceEmbedding;
-
-        appDatabase.userDao().insertUser(user);
-
-        mRegisteredFaces.put(name, feature.clone());
-        Toast.makeText(this, "Rostro de '" + name + "' registrado exitosamente en la base de datos.", Toast.LENGTH_LONG).show();
-
-        feature.release();
+            appDatabase.userDao().insertUser(user);
+            Log.i(TAG, "Usuario '" + name + "' insertado en la base de datos.");
+        });
     }
 
     private void loadData() {
-        mRegisteredFaces.clear();
-        List<User> userList = appDatabase.userDao().getAllUsers();
+        databaseExecutor.execute(() -> {
+            List<User> userList = appDatabase.userDao().getAllUsers();
 
-        for (User user : userList) {
-            float[] faceArray = byteArrayToFloatArray(user.faceEmbedding);
-            Mat faceFeature = new Mat(1, faceArray.length, 5);
-            faceFeature.put(0, 0, faceArray);
-            mRegisteredFaces.put(user.name, faceFeature);
-        }
+            mainThreadHandler.post(() -> {
+                for (Mat mat : mRegisteredFaces.values()) {
+                    mat.release();
+                }
+                mRegisteredFaces.clear();
 
-        Toast.makeText(this, mRegisteredFaces.size() + " rostro(s) registrado(s) cargado(s) desde la base de datos.", Toast.LENGTH_SHORT).show();
+                for (User user : userList) {
+                    float[] faceArray = byteArrayToFloatArray(user.faceEmbedding);
+                    Mat faceFeature = new Mat(1, faceArray.length, CvType.CV_32F);
+                    faceFeature.put(0, 0, faceArray);
+                    mRegisteredFaces.put(user.name, faceFeature);
+                }
+
+                Toast.makeText(this, mRegisteredFaces.size() + " rostro(s) registrado(s) cargado(s) desde la base de datos.", Toast.LENGTH_SHORT).show();
+            });
+        });
     }
 
     private byte[] floatArrayToByteArray(float[] floats) {
@@ -359,6 +373,7 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     public void onDestroy() {
         super.onDestroy();
         mOpenCvCameraView.disableView();
+        databaseExecutor.shutdown();
     }
 
     @Override
