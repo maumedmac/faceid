@@ -9,9 +9,12 @@ import android.util.Log;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.room.Room;
+
+import com.google.android.material.slider.Slider;
 
 import org.opencv.android.CameraActivity;
 import org.opencv.android.CameraBridgeViewBase;
@@ -39,6 +42,7 @@ import java.nio.FloatBuffer;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -69,6 +73,10 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     private CameraBridgeViewBase   mOpenCvCameraView;
     private int mCameraId = CameraBridgeViewBase.CAMERA_ID_BACK;
 
+    private Slider sensitivitySlider;
+    private TextView sensitivityLabel;
+    private double cosThreshold = 0.363;
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -97,6 +105,17 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
         mOpenCvCameraView.setCameraIndex(mCameraId);
         mOpenCvCameraView.setCvCameraViewListener(this);
 
+        sensitivitySlider = findViewById(R.id.sensitivity_slider);
+        sensitivityLabel = findViewById(R.id.sensitivity_label);
+
+        sensitivitySlider.setValue((float)cosThreshold);
+        sensitivityLabel.setText(String.format(Locale.US, "Sensibilidad: %.3f", cosThreshold));
+
+        sensitivitySlider.addOnChangeListener((slider, value, fromUser) -> {
+            cosThreshold = value;
+            sensitivityLabel.setText(String.format(Locale.US, "Sensibilidad: %.3f", value));
+        });
+
         Button switchCameraButton = findViewById(R.id.switch_camera_button);
         switchCameraButton.setOnClickListener(v -> swapCamera());
 
@@ -105,6 +124,12 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
 
         Button loadDataButton = findViewById(R.id.button_load_data);
         loadDataButton.setOnClickListener(v -> loadData());
+        
+        Button syncButton = findViewById(R.id.button_sync);
+        syncButton.setOnClickListener(v -> {
+            Toast.makeText(this, "Sincronizando con la nube...", Toast.LENGTH_SHORT).show();
+            // Aquí irá la lógica de sincronización
+        });
     }
 
     private String getPathFromRawResource(int resourceId, String filename) {
@@ -279,7 +304,6 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
 
         String bestMatchName = null;
         double maxCosineScore = 0.0;
-        double cosThreshold = 0.363;
 
         for (Map.Entry<String, Mat> entry : mRegisteredFaces.entrySet()) {
             double cosScore = mFaceRecognizer.match(entry.getValue(), currentFeature, FaceRecognizerSF.FR_COSINE);
