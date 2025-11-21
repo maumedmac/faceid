@@ -1,21 +1,5 @@
 package bo.edu.cba.faceid;
 
-import org.opencv.android.CameraActivity;
-import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame;
-import org.opencv.android.OpenCVLoader;
-import org.opencv.core.Core;
-import org.opencv.core.CvType;
-import org.opencv.core.Mat;
-import org.opencv.core.Point;
-import org.opencv.core.Rect;
-import org.opencv.core.Scalar;
-import org.opencv.core.Size;
-import org.opencv.android.CameraBridgeViewBase;
-import org.opencv.android.CameraBridgeViewBase.CvCameraViewListener2;
-import org.opencv.objdetect.FaceDetectorYN;
-import org.opencv.objdetect.FaceRecognizerSF;
-import org.opencv.imgproc.Imgproc;
-
 import android.app.AlertDialog;
 import android.os.Bundle;
 import android.os.Handler;
@@ -27,6 +11,24 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.Toast;
 
+import androidx.room.Room;
+
+import org.opencv.android.CameraActivity;
+import org.opencv.android.CameraBridgeViewBase;
+import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame;
+import org.opencv.android.CameraBridgeViewBase.CvCameraViewListener2;
+import org.opencv.android.OpenCVLoader;
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.Point;
+import org.opencv.core.Rect;
+import org.opencv.core.Scalar;
+import org.opencv.core.Size;
+import org.opencv.imgproc.Imgproc;
+import org.opencv.objdetect.FaceDetectorYN;
+import org.opencv.objdetect.FaceRecognizerSF;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -34,7 +36,6 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -59,7 +60,7 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     private FaceRecognizerSF       mFaceRecognizer;
     private Mat                    mFaces;
     private final HashMap<String, Mat> mRegisteredFaces = new HashMap<>();
-    private final List<Mat>        registrationFeatures = new ArrayList<>();
+    private final java.util.List<Mat>        registrationFeatures = new java.util.ArrayList<>();
 
     private AppDatabase            appDatabase;
     private ExecutorService        databaseExecutor;
@@ -372,8 +373,14 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     @Override
     public void onDestroy() {
         super.onDestroy();
-        mOpenCvCameraView.disableView();
+        if (mOpenCvCameraView != null) {
+            mOpenCvCameraView.disableView();
+        }
         databaseExecutor.shutdown();
+        // Release all persistent Mat objects to prevent memory leaks
+        for (Mat mat : mRegisteredFaces.values()) {
+            mat.release();
+        }
     }
 
     @Override
@@ -386,16 +393,17 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
 
     @Override
     public void onCameraViewStopped() {
+        // Release only frame-specific Mats
         mRgba.release();
         mBgr.release();
         mBgrScaled.release();
         mFaces.release();
-        for(Mat mat : mRegisteredFaces.values()) {
+
+        // Release registration features if registration was interrupted
+        for (Mat mat : registrationFeatures) {
             mat.release();
         }
-        for(Mat mat : registrationFeatures) {
-            mat.release();
-        }
+        registrationFeatures.clear();
     }
 
     private void visualizeAndVerify(Mat rgba, Mat faces) {
