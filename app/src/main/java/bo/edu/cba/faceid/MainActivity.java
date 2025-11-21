@@ -458,7 +458,7 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
             }
 
             if (identifiedName != null) {
-                Imgproc.putText(rgba, identifiedName, new Point(box.x, box.y - 10), Imgproc.FONT_HERSHEY_SIMPLEX, 0.9, MATCH_COLOR, 2);
+                Imgproc.putText(rgba, identifiedName, new Point(box.x, box.y - 10), Imgproc.FONT_HERSHEY_SIMPLEX, 1.5, MATCH_COLOR, 2);
             }
         }
     }
