@@ -1,5 +1,8 @@
 package bo.edu.cba.faceid;
 
+import com.parse.ParseObject;
+import com.parse.ParseQuery;
+
 import org.opencv.android.CameraActivity;
 import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame;
 import org.opencv.android.OpenCVLoader;
@@ -18,8 +21,6 @@ import org.opencv.imgproc.Imgproc;
 
 import android.app.AlertDialog;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.text.InputType;
 import android.util.Log;
 import android.view.WindowManager;
@@ -31,16 +32,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public class MainActivity extends CameraActivity implements CvCameraViewListener2 {
 
@@ -61,10 +57,6 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     private final HashMap<String, Mat> mRegisteredFaces = new HashMap<>();
     private final List<Mat>        registrationFeatures = new ArrayList<>();
 
-    private AppDatabase            appDatabase;
-    private ExecutorService        databaseExecutor;
-    private Handler                mainThreadHandler;
-
     private CameraBridgeViewBase   mOpenCvCameraView;
     private int mCameraId = CameraBridgeViewBase.CAMERA_ID_BACK;
 
@@ -79,10 +71,6 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
             Toast.makeText(this, "¡La inicialización de OpenCV falló!", Toast.LENGTH_LONG).show();
             return;
         }
-
-        appDatabase = AppDatabase.getDatabase(this);
-        databaseExecutor = Executors.newSingleThreadExecutor();
-        mainThreadHandler = new Handler(Looper.getMainLooper());
 
         loadFaceModels();
         loadData();
@@ -292,55 +280,51 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     }
 
     private void addUserToDatabase(String name, float[] featureArray) {
-        databaseExecutor.execute(() -> {
-            byte[] faceEmbedding = floatArrayToByteArray(featureArray);
+        List<Double> featureList = new ArrayList<>();
+        for (float v : featureArray) {
+            featureList.add((double) v);
+        }
 
-            User user = new User();
-            user.name = name;
-            user.faceEmbedding = faceEmbedding;
-
-            appDatabase.userDao().insertUser(user);
-            Log.i(TAG, "Usuario '" + name + "' insertado en la base de datos.");
+        ParseObject user = new ParseObject("UserFace");
+        user.put("name", name);
+        user.put("faceEmbedding", featureList);
+        user.saveInBackground(e -> {
+            if (e == null) {
+                Log.d(TAG, "Usuario '" + name + "' guardado en Back4App.");
+            } else {
+                Log.e(TAG, "Error al guardar el usuario en Back4App", e);
+            }
         });
     }
 
     private void loadData() {
-        databaseExecutor.execute(() -> {
-            List<User> userList = appDatabase.userDao().getAllUsers();
-
-            mainThreadHandler.post(() -> {
+        ParseQuery<ParseObject> query = ParseQuery.getQuery("UserFace");
+        query.findInBackground((users, e) -> {
+            if (e == null) {
                 for (Mat mat : mRegisteredFaces.values()) {
                     mat.release();
                 }
                 mRegisteredFaces.clear();
 
-                for (User user : userList) {
-                    float[] faceArray = byteArrayToFloatArray(user.faceEmbedding);
-                    Mat faceFeature = new Mat(1, faceArray.length, CvType.CV_32F);
-                    faceFeature.put(0, 0, faceArray);
-                    mRegisteredFaces.put(user.name, faceFeature);
+                for (ParseObject user : users) {
+                    String name = user.getString("name");
+                    List<Double> featureList = user.getList("faceEmbedding");
+                    if (name != null && featureList != null) {
+                        float[] featureArray = new float[featureList.size()];
+                        for (int i = 0; i < featureList.size(); i++) {
+                            featureArray[i] = featureList.get(i).floatValue();
+                        }
+
+                        Mat faceFeature = new Mat(1, featureArray.length, CvType.CV_32F);
+                        faceFeature.put(0, 0, featureArray);
+                        mRegisteredFaces.put(name, faceFeature);
+                    }
                 }
-
-                Toast.makeText(this, mRegisteredFaces.size() + " rostro(s) registrado(s) cargado(s) desde la base de datos.", Toast.LENGTH_SHORT).show();
-            });
+                Toast.makeText(this, mRegisteredFaces.size() + " rostro(s) registrado(s) cargado(s) desde la nube.", Toast.LENGTH_SHORT).show();
+            } else {
+                Log.e(TAG, "Error al cargar los usuarios desde Back4App", e);
+            }
         });
-    }
-
-    private byte[] floatArrayToByteArray(float[] floats) {
-        ByteBuffer buffer = ByteBuffer.allocate(floats.length * 4);
-        buffer.order(ByteOrder.nativeOrder());
-        FloatBuffer floatBuffer = buffer.asFloatBuffer();
-        floatBuffer.put(floats);
-        return buffer.array();
-    }
-
-    private float[] byteArrayToFloatArray(byte[] bytes) {
-        ByteBuffer buffer = ByteBuffer.wrap(bytes);
-        buffer.order(ByteOrder.nativeOrder());
-        FloatBuffer floatBuffer = buffer.asFloatBuffer();
-        float[] floats = new float[floatBuffer.remaining()];
-        floatBuffer.get(floats);
-        return floats;
     }
 
     private void swapCamera() {
@@ -373,7 +357,6 @@ public class MainActivity extends CameraActivity implements CvCameraViewListener
     public void onDestroy() {
         super.onDestroy();
         mOpenCvCameraView.disableView();
-        databaseExecutor.shutdown();
     }
 
     @Override

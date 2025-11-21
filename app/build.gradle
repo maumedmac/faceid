@@ -38,7 +38,10 @@ dependencies {
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
 
-    // Room components (for Java)
+    // Back4App
+    implementation 'com.github.parse-community.Parse-SDK-Android:parse:4.0.0'
+
+    // Room components (for Java) - Added back to prevent compilation errors
     def room_version = "2.6.1"
     implementation "androidx.room:room-runtime:$room_version"
     annotationProcessor "androidx.room:room-compiler:$room_version"
